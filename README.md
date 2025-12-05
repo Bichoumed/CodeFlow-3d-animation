@@ -1,7 +1,7 @@
 Titer de projet : trois-dimensions
 
 
-## 1.Description du Defit :
+## 1.Description du Défi :
 
 SolarEdu3D est un site web éducatiants et aux utilisateurs de comprendre le fonctionnement de l'énergie solaire, ses avantages et ses défis, à travers des scènes 3D réalistes et des explications structurées qui ff et innovant qui s'appuie sur la technologie 3D pour expliquer les concepts de l'énergie solaire de manière interactive et visuellement attrayante.
 Le projet combine des graphismes en trois dimensions, réalisés avec la bibliothèque Three.js, et un contenu scientifique simplifié pour offrir une expérience d'apprentissage moderne et ludique.
