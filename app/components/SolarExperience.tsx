@@ -791,7 +791,7 @@ export default function SolarExperience() {
                 <div className="container">
                     <div className="section-header" data-aos="fade-up">
                         <h2 className="section-title">Défi "<span className="highlight">En trois dimensions</span>"</h2>
-                        <p className="section-subtitle">Projet réalisé pour la Nuit de l'Info 2024 - IUT de Marne-la-Vallée</p>
+                        <p className="section-subtitle">Projet réalisé pour la Nuit de l'Info 2025 - IUT de Marne-la-Vallée</p>
                     </div>
 
                     <div className="defi-content">
@@ -917,10 +917,6 @@ export default function SolarExperience() {
                         <div className="footer-contact">
                             <h4>Contact</h4>
                             <div className="contact-item">
-                                <i className="fas fa-map-marker-alt"></i>
-                                <span>IUT de Marne-la-Vallée<br />2 rue Albert Einstein<br />77420 Champs-sur-Marne</span>
-                            </div>
-                            <div className="contact-item">
                                 <i className="fas fa-envelope"></i>
                                 <span>contact@solaredu3d.fr</span>
                             </div>
@@ -928,7 +924,7 @@ export default function SolarExperience() {
                     </div>
 
                     <div className="footer-bottom">
-                        <p>&copy; 2024 SolarEdu3D - Projet Nuit de l'Info. Tous droits réservés.</p>
+                        <p>&copy; 2025 SolarEdu3D - Projet Nuit de l'Info. Tous droits réservés.</p>
                     </div>
                 </div>
             </footer>

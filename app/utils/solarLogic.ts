@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import AOS from 'aos';
 
 // ============ CONFIGURATION GLOBALE ============
@@ -46,7 +47,24 @@ class SolarApp {
     panelColor = 0x1E90FF;
     frameColor = 0xC0C0C0;
 
+
+    loader = new GLTFLoader();
+
     constructor() { }
+
+    loadModel(path: string, scale: number = 1, position: THREE.Vector3 = new THREE.Vector3(0, 0, 0)): Promise<THREE.Group> {
+        return new Promise((resolve, reject) => {
+            this.loader.load(path, (gltf) => {
+                const model = gltf.scene;
+                model.scale.set(scale, scale, scale);
+                model.position.copy(position);
+                resolve(model);
+            }, undefined, (error) => {
+                console.error(`Error loading model ${path}:`, error);
+                reject(error);
+            });
+        });
+    }
 
     init(onStatsUpdate: (stats: Stats) => void) {
         this.onStatsUpdate = onStatsUpdate;
@@ -198,81 +216,174 @@ class SolarApp {
 
     // ... Setup functions ...
 
-    setupSunScene(scene: THREE.Scene, camera: THREE.Camera) {
-        scene.background = new THREE.Color(0x0c2461);
-        camera.position.set(0, 0, 15);
+    async setupSunScene(scene: THREE.Scene, camera: THREE.Camera) {
+        scene.background = new THREE.Color(0x050510); // Darker space background
+        camera.position.set(0, 0, 12);
 
-        const light = new THREE.DirectionalLight(0xffffff, 1);
-        light.position.set(5, 10, 5);
-        scene.add(light);
-        scene.add(new THREE.AmbientLight(0x404040));
+        // Lighting
+        const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+        scene.add(ambientLight);
+        const pointLight = new THREE.PointLight(0xffaa00, 2, 50);
+        pointLight.position.set(0, 0, 0);
+        scene.add(pointLight);
 
-        const sunGeometry = new THREE.SphereGeometry(3, 32, 32);
-        const sunMaterial = new THREE.MeshPhongMaterial({
-            color: 0xFF9800,
-            emissive: 0xFF5722,
-            emissiveIntensity: 0.5
-        });
-        const sun = new THREE.Mesh(sunGeometry, sunMaterial);
-        scene.add(sun);
+        // Load Sun Model
+        try {
+            const sunGroup = new THREE.Group();
+            scene.add(sunGroup);
 
-        const rays = new THREE.Group();
-        for (let i = 0; i < 12; i++) {
-            const rayGeometry = new THREE.ConeGeometry(0.2, 5, 4);
-            const rayMaterial = new THREE.MeshBasicMaterial({
-                color: 0xFFEB3B,
-                transparent: true,
-                opacity: 0.7
-            });
-            const ray = new THREE.Mesh(rayGeometry, rayMaterial);
-            ray.position.y = 3;
-            ray.rotation.x = Math.PI / 2;
-            ray.rotation.z = (i / 12) * Math.PI * 2;
-            rays.add(ray);
-        }
-        scene.add(rays);
+            // Try loading GLB, fallback to sphere if fails (or if file missing in dev)
+            // const sunModel = await this.loadModel('/sun.glb', 2); 
+            // For now, let's assume we might need to fallback or wrap it. 
+            // Since user provided the path, we try to load it.
 
-        const particles = new THREE.Group();
-        const particleCount = 50;
-        const particleGeometry = new THREE.BufferGeometry();
-        const positions = new Float32Array(particleCount * 3);
+            // Note: In a real app, we'd handle the async better. 
+            // Here we just fire and forget the load, adding to scene when ready.
+            this.loader.load('/sun.glb', (gltf) => {
+                const sun = gltf.scene;
+                sun.scale.set(3, 3, 3);
 
-        for (let i = 0; i < particleCount * 3; i += 3) {
-            positions[i] = (Math.random() - 0.5) * 20;
-            positions[i + 1] = (Math.random() - 0.5) * 20;
-            positions[i + 2] = (Math.random() - 0.5) * 20;
-        }
-
-        particleGeometry.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-        const particleMaterial = new THREE.PointsMaterial({
-            color: 0xFF9800,
-            size: 0.1,
-            transparent: true,
-            opacity: 0.8
-        });
-
-        const particleSystem = new THREE.Points(particleGeometry, particleMaterial);
-        scene.add(particleSystem);
-
-        // Return update function
-        setTimeout(() => {
-            if (this.scenes.sun) {
-                this.scenes.sun.setUpdateFunction(() => {
-                    sun.rotation.y += 0.005;
-                    rays.rotation.y += 0.01;
-                    particleSystem.rotation.y += 0.001;
-
-                    const time = Date.now() * 0.001;
-                    sun.material.emissiveIntensity = 0.5 + 0.3 * Math.sin(time);
-
-                    const positions = particleSystem.geometry.attributes.position.array as Float32Array;
-                    for (let i = 0; i < positions.length; i += 3) {
-                        positions[i + 1] += Math.sin(time + i) * 0.01;
+                // Enhance material if possible
+                sun.traverse((child) => {
+                    if ((child as THREE.Mesh).isMesh) {
+                        const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                        m.emissive = new THREE.Color(0xff4400);
+                        m.emissiveIntensity = 2;
+                        m.toneMapped = false;
                     }
-                    particleSystem.geometry.attributes.position.needsUpdate = true;
                 });
+                sunGroup.add(sun);
+            }, undefined, (_err) => {
+                // Fallback if model fails
+                const geometry = new THREE.SphereGeometry(3, 64, 64);
+                const material = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+                const sun = new THREE.Mesh(geometry, material);
+                sunGroup.add(sun);
+            });
+
+            // Flares (Leaves/Petals around)
+            const flareCount = 8;
+            const flares = new THREE.Group();
+            const flareGeo = new THREE.PlaneGeometry(2, 6);
+            const flareMat = new THREE.MeshBasicMaterial({
+                color: 0xff5500,
+                transparent: true,
+                opacity: 0.4,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+                depthWrite: false
+            });
+
+            for (let i = 0; i < flareCount; i++) {
+                const flare = new THREE.Mesh(flareGeo, flareMat);
+                flare.position.set(0, 0, 0);
+                const angle = (i / flareCount) * Math.PI * 2;
+                flare.rotation.z = angle;
+                flare.translateY(4); // Move out from center
+                flares.add(flare);
             }
-        }, 0);
+            sunGroup.add(flares);
+
+            // Particles Halo
+            const particleCount = 200;
+            const particlesGeo = new THREE.BufferGeometry();
+            const positions = new Float32Array(particleCount * 3);
+            const speeds = new Float32Array(particleCount);
+
+            for (let i = 0; i < particleCount; i++) {
+                const r = 4 + Math.random() * 2;
+                const theta = Math.random() * Math.PI * 2;
+                const phi = Math.acos(2 * Math.random() - 1);
+
+                positions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+                positions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+                positions[i * 3 + 2] = r * Math.cos(phi);
+                speeds[i] = 0.02 + Math.random() * 0.05;
+            }
+            particlesGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+            const particlesMat = new THREE.PointsMaterial({
+                color: 0xffff00,
+                size: 0.15,
+                transparent: true,
+                opacity: 0.6,
+                blending: THREE.AdditiveBlending
+            });
+            const particleSystem = new THREE.Points(particlesGeo, particlesMat);
+            sunGroup.add(particleSystem);
+
+            // Burst Particles
+            const burstParticles = new THREE.Group();
+            scene.add(burstParticles);
+
+            const createBurst = () => {
+                const count = 20;
+                const geo = new THREE.BufferGeometry();
+                const pos = [];
+                const vel = [];
+                for (let i = 0; i < count; i++) {
+                    pos.push(0, 0, 0);
+                    const v = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize().multiplyScalar(0.2 + Math.random() * 0.3);
+                    vel.push(v.x, v.y, v.z);
+                }
+                geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+                const mat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.2, transparent: true });
+                const points = new THREE.Points(geo, mat);
+                points.userData = { velocities: vel, age: 0 };
+                burstParticles.add(points);
+            };
+
+            // Setup Update Function
+            setTimeout(() => {
+                if (this.scenes.sun) {
+                    this.scenes.sun.setUpdateFunction(() => {
+                        const time = Date.now() * 0.001;
+
+                        // Rotate Sun
+                        sunGroup.rotation.y = time * 0.1;
+                        sunGroup.rotation.z = time * 0.05;
+
+                        // Pulse Flares
+                        const scale = 1 + 0.1 * Math.sin(time * 2);
+                        flares.scale.set(scale, scale, scale);
+
+                        // Animate Halo Particles
+                        const posAttr = particlesGeo.attributes.position;
+                        for (let i = 0; i < particleCount; i++) {
+                            // Simple jitter or rotation could go here
+                            // For now let's just rotate the whole system
+                        }
+                        particleSystem.rotation.y = -time * 0.2;
+
+                        // Random Bursts
+                        if (Math.random() < 0.02) createBurst();
+
+                        // Update Bursts
+                        for (let i = burstParticles.children.length - 1; i >= 0; i--) {
+                            const p = burstParticles.children[i] as THREE.Points;
+                            const positions = p.geometry.attributes.position.array as Float32Array;
+                            const vels = p.userData.velocities;
+                            p.userData.age += 0.1;
+
+                            for (let j = 0; j < positions.length / 3; j++) {
+                                positions[j * 3] += vels[j * 3];
+                                positions[j * 3 + 1] += vels[j * 3 + 1];
+                                positions[j * 3 + 2] += vels[j * 3 + 2];
+                            }
+                            p.geometry.attributes.position.needsUpdate = true;
+                            (p.material as THREE.PointsMaterial).opacity = 1 - (p.userData.age / 5);
+
+                            if (p.userData.age > 5) {
+                                burstParticles.remove(p);
+                                p.geometry.dispose();
+                            }
+                        }
+                    });
+                }
+            }, 0);
+
+        } catch (e) {
+            console.error("Error in Sun Scene", e);
+        }
     }
 
     setupRadiationScene(scene: THREE.Scene, camera: THREE.Camera) {
@@ -361,172 +472,252 @@ class SolarApp {
     }
 
     setupProcessScene(scene: THREE.Scene, camera: THREE.Camera) {
-        scene.background = new THREE.Color(0x0f0c29);
-        camera.position.set(0, 8, 15);
+        scene.background = new THREE.Color(0x101020);
+        camera.position.set(0, 5, 10);
+        camera.lookAt(0, 0, 0);
 
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // Load Models
         const panelGroup = new THREE.Group();
-        panelGroup.name = 'panelGroup';
-
-        const frameGeometry = new THREE.BoxGeometry(6, 0.2, 3);
-        const frameMaterial = new THREE.MeshPhongMaterial({
-            color: 0x555555,
-            shininess: 100
-        });
-        const frame = new THREE.Mesh(frameGeometry, frameMaterial);
-        frame.position.y = 0.1;
-        panelGroup.add(frame);
-
-        const cellsGroup = new THREE.Group();
-        for (let x = 0; x < 4; x++) {
-            for (let z = 0; z < 2; z++) {
-                const cellGeometry = new THREE.BoxGeometry(1.2, 0.1, 1.2);
-                const cellMaterial = new THREE.MeshPhongMaterial({
-                    color: this.panelColor,
-                    emissive: 0x1a237e,
-                    emissiveIntensity: 0.2
-                });
-                const cell = new THREE.Mesh(cellGeometry, cellMaterial);
-                cell.position.set(
-                    (x - 1.5) * 1.5,
-                    0.15,
-                    (z - 0.5) * 1.5
-                );
-                cellsGroup.add(cell);
-            }
-        }
-        panelGroup.add(cellsGroup);
+        const batteryGroup = new THREE.Group();
         scene.add(panelGroup);
+        scene.add(batteryGroup);
 
-        const createElectron = () => {
-            const geometry = new THREE.SphereGeometry(0.1, 8, 8);
-            const material = new THREE.MeshBasicMaterial({
-                color: 0x00FF00,
-                transparent: true,
-                opacity: 0.8
-            });
-            const electron = new THREE.Mesh(geometry, material);
-            electron.position.set(
-                (Math.random() - 0.5) * 3,
-                Math.random() * 2 - 1,
-                (Math.random() - 0.5) * 2
-            );
-            return electron;
-        };
+        // Solar Panel
+        this.loader.load('/solar_panel.glb', (gltf) => {
+            const panel = gltf.scene;
+            panel.scale.set(2, 2, 2);
+            panel.position.set(-3, 0, 0);
+            panel.rotation.y = Math.PI / 4;
+            panelGroup.add(panel);
+        }, undefined, (err) => {
+            // Fallback
+            const geo = new THREE.BoxGeometry(3, 0.1, 2);
+            const mat = new THREE.MeshPhongMaterial({ color: 0x0000ff });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(-3, 0, 0);
+            panelGroup.add(mesh);
+        });
 
+        // Battery
+        let batteryFill: THREE.Mesh;
+        this.loader.load('/battery.glb', (gltf) => {
+            const battery = gltf.scene;
+            battery.scale.set(1, 1, 1);
+            battery.position.set(3, 0, 0);
+            batteryGroup.add(battery);
+
+            // Add a fill indicator if not present in model
+            // Assuming battery is roughly cylindrical or boxy
+            const fillGeo = new THREE.CylinderGeometry(0.4, 0.4, 1.8, 32);
+            const fillMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.8 });
+            batteryFill = new THREE.Mesh(fillGeo, fillMat);
+            batteryFill.position.set(3, 1, 0);
+            batteryFill.scale.y = 0.1;
+            scene.add(batteryFill);
+
+        }, undefined, (err) => {
+            // Fallback
+            const geo = new THREE.CylinderGeometry(0.5, 0.5, 2, 32);
+            const mat = new THREE.MeshPhongMaterial({ color: 0x888888 });
+            const mesh = new THREE.Mesh(geo, mat);
+            mesh.position.set(3, 1, 0);
+            batteryGroup.add(mesh);
+
+            const fillGeo = new THREE.CylinderGeometry(0.51, 0.51, 2, 32);
+            const fillMat = new THREE.MeshBasicMaterial({ color: 0x00ff00, transparent: true, opacity: 0.5 });
+            batteryFill = new THREE.Mesh(fillGeo, fillMat);
+            batteryFill.position.set(3, 1, 0);
+            batteryFill.scale.y = 0.1;
+            scene.add(batteryFill);
+        });
+
+        // Wire Path
+        const curve = new THREE.CatmullRomCurve3([
+            new THREE.Vector3(-3, 0, 0),
+            new THREE.Vector3(-1, 0.5, 0),
+            new THREE.Vector3(1, 0.5, 0),
+            new THREE.Vector3(3, 0, 0)
+        ]);
+
+        const tubeGeo = new THREE.TubeGeometry(curve, 20, 0.05, 8, false);
+        const tubeMat = new THREE.MeshBasicMaterial({ color: 0x444444 });
+        const tube = new THREE.Mesh(tubeGeo, tubeMat);
+        scene.add(tube);
+
+        // Electrons
+        const electronCount = 20;
         const electrons = new THREE.Group();
-        for (let i = 0; i < 20; i++) {
-            const electron = createElectron();
-            electrons.add(electron);
-        }
         scene.add(electrons);
 
-        scene.add(new THREE.AmbientLight(0x404040));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(5, 10, 5);
-        scene.add(directionalLight);
+        const electronGeo = new THREE.SphereGeometry(0.08, 8, 8);
+        const electronMat = new THREE.MeshBasicMaterial({ color: 0xffff00 });
 
+        for (let i = 0; i < electronCount; i++) {
+            const el = new THREE.Mesh(electronGeo, electronMat);
+            electrons.add(el);
+            el.userData = { progress: i / electronCount };
+        }
+
+        // Update Function
         setTimeout(() => {
             if (this.scenes.process) {
                 this.scenes.process.setUpdateFunction(() => {
-                    panelGroup.rotation.y += 0.001;
+                    const time = Date.now() * 0.001;
 
-                    electrons.children.forEach((electron: any, i) => {
-                        electron.position.y += 0.05;
-                        electron.rotation.x += 0.1;
-                        electron.rotation.y += 0.1;
+                    // Animate Electrons
+                    electrons.children.forEach((el) => {
+                        el.userData.progress += 0.01;
+                        if (el.userData.progress > 1) el.userData.progress = 0;
 
-                        if (electron.position.y > 5) {
-                            electron.position.y = -2;
-                            electron.position.x = (Math.random() - 0.5) * 3;
-                            electron.position.z = (Math.random() - 0.5) * 2;
-                        }
-
-                        const cellIndex = i % 8;
-                        if (cellsGroup.children[cellIndex]) {
-                            const intensity = 0.2 + 0.1 * Math.sin(Date.now() * 0.001 + i);
-                            ((cellsGroup.children[cellIndex] as THREE.Mesh).material as THREE.MeshPhongMaterial).emissiveIntensity = intensity;
-                        }
+                        const point = curve.getPoint(el.userData.progress);
+                        el.position.copy(point);
                     });
+
+                    // Animate Battery Fill
+                    if (batteryFill) {
+                        batteryFill.scale.y = (Math.sin(time) + 1) / 2 * 0.9 + 0.1;
+                        batteryFill.position.y = 0 + batteryFill.scale.y; // Adjust based on pivot
+                    }
                 });
             }
         }, 0);
     }
 
     setupBenefitsScene(scene: THREE.Scene, camera: THREE.Camera) {
-        scene.background = new THREE.Color(0x1a2a6c);
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
         camera.position.set(0, 10, 20);
+        camera.lookAt(0, 0, 0);
 
-        const createTree = () => {
-            const trunkGeometry = new THREE.CylinderGeometry(0.3, 0.4, 3);
-            const trunkMaterial = new THREE.MeshPhongMaterial({ color: 0x8B4513 });
-            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(10, 20, 10);
+        scene.add(dirLight);
 
-            const leavesGeometry = new THREE.ConeGeometry(2, 4, 8);
-            const leavesMaterial = new THREE.MeshPhongMaterial({ color: 0x228B22 });
-            const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
-            leaves.position.y = 3;
+        // Ground
+        const groundGeo = new THREE.PlaneGeometry(50, 50);
+        const groundMat = new THREE.MeshStandardMaterial({ color: 0x4CAF50 });
+        const ground = new THREE.Mesh(groundGeo, groundMat);
+        ground.rotation.x = -Math.PI / 2;
+        ground.position.y = -1;
+        scene.add(ground);
 
-            const tree = new THREE.Group();
-            tree.add(trunk);
-            tree.add(leaves);
-            return tree;
+        // Helper to create low poly tree
+        const createTree = (x: number, z: number) => {
+            const group = new THREE.Group();
+            const trunkGeo = new THREE.CylinderGeometry(0.2, 0.4, 1.5, 6);
+            const trunkMat = new THREE.MeshStandardMaterial({ color: 0x8B4513, flatShading: true });
+            const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+            trunk.position.y = 0.75;
+
+            const leavesGeo = new THREE.ConeGeometry(1.5, 3, 6);
+            const leavesMat = new THREE.MeshStandardMaterial({ color: 0x228B22, flatShading: true });
+            const leaves = new THREE.Mesh(leavesGeo, leavesMat);
+            leaves.position.y = 2.5;
+
+            group.add(trunk, leaves);
+            group.position.set(x, -1, z);
+            return group;
         };
 
-        const createCO2Particle = () => {
-            const geometry = new THREE.SphereGeometry(0.3, 8, 8);
-            const material = new THREE.MeshBasicMaterial({
-                color: 0x808080,
-                transparent: true,
-                opacity: 0.7
-            });
-            const particle = new THREE.Mesh(geometry, material);
-            particle.position.set(
-                (Math.random() - 0.5) * 15,
-                Math.random() * 5 - 5,
-                (Math.random() - 0.5) * 15
-            );
-            return particle;
+        // Helper to create low poly house
+        const createHouse = (x: number, z: number) => {
+            const group = new THREE.Group();
+            const bodyGeo = new THREE.BoxGeometry(2, 2, 2);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf5f5dc, flatShading: true });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 1;
+
+            const roofGeo = new THREE.ConeGeometry(1.5, 1.5, 4);
+            const roofMat = new THREE.MeshStandardMaterial({ color: 0xA52A2A, flatShading: true });
+            const roof = new THREE.Mesh(roofGeo, roofMat);
+            roof.position.y = 2.75;
+            roof.rotation.y = Math.PI / 4;
+
+            group.add(body, roof);
+            group.position.set(x, -1, z);
+            return group;
+        };
+
+        // Helper to create low poly factory
+        const createFactory = (x: number, z: number) => {
+            const group = new THREE.Group();
+            const bodyGeo = new THREE.BoxGeometry(3, 2, 2);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: 0x708090, flatShading: true });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.position.y = 1;
+
+            const chimneyGeo = new THREE.CylinderGeometry(0.3, 0.3, 2, 8);
+            const chimneyMat = new THREE.MeshStandardMaterial({ color: 0x404040, flatShading: true });
+            const chimney = new THREE.Mesh(chimneyGeo, chimneyMat);
+            chimney.position.set(0.8, 2, 0);
+
+            group.add(body, chimney);
+            group.position.set(x, -1, z);
+            return group;
         };
 
         const trees = new THREE.Group();
-        for (let i = 0; i < 10; i++) {
-            const tree = createTree();
-            tree.position.set(
-                (Math.random() - 0.5) * 20,
-                0,
-                (Math.random() - 0.5) * 20
-            );
-            trees.add(tree);
+        for (let i = 0; i < 15; i++) {
+            trees.add(createTree(Math.random() * 20 - 10, Math.random() * 20 - 10));
         }
         scene.add(trees);
 
+        const houses = new THREE.Group();
+        houses.add(createHouse(-5, 0));
+        houses.add(createHouse(5, 5));
+        scene.add(houses);
+
+        const factory = createFactory(0, -5);
+        scene.add(factory);
+
+        // CO2 Particles
         const co2Particles = new THREE.Group();
+        const co2Geo = new THREE.SphereGeometry(0.2, 4, 4);
+        const co2Mat = new THREE.MeshBasicMaterial({ color: 0x555555, transparent: true, opacity: 0.6 });
+
         for (let i = 0; i < 30; i++) {
-            const particle = createCO2Particle();
-            co2Particles.add(particle);
+            const p = new THREE.Mesh(co2Geo, co2Mat);
+            p.position.set(0, 2, -5); // Start at factory
+            p.userData = {
+                velocity: new THREE.Vector3((Math.random() - 0.5) * 0.1, 0.05 + Math.random() * 0.05, (Math.random() - 0.5) * 0.1),
+                age: Math.random() * 100
+            };
+            co2Particles.add(p);
         }
         scene.add(co2Particles);
-
-        scene.add(new THREE.AmbientLight(0x404040));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(10, 20, 10);
-        scene.add(directionalLight);
 
         setTimeout(() => {
             if (this.scenes.benefits) {
                 this.scenes.benefits.setUpdateFunction(() => {
-                    trees.rotation.y += 0.001;
+                    const time = Date.now() * 0.001;
 
-                    co2Particles.children.forEach((particle: any, i) => {
-                        particle.position.y += 0.02;
-                        particle.rotation.x += 0.01;
+                    // Bobbing animation
+                    trees.children.forEach((tree, i) => {
+                        tree.scale.y = 1 + 0.05 * Math.sin(time * 2 + i);
+                    });
 
-                        if (particle.position.y > 10) {
-                            particle.position.y = -5;
-                            particle.position.x = (Math.random() - 0.5) * 15;
-                            particle.position.z = (Math.random() - 0.5) * 15;
+                    houses.children.forEach((house, i) => {
+                        house.position.y = -1 + 0.1 * Math.sin(time + i);
+                    });
 
-                            this.updateImpactStats();
+                    // CO2 Animation
+                    co2Particles.children.forEach((p) => {
+                        p.position.add(p.userData.velocity);
+                        p.userData.age++;
+
+                        if (p.position.y > 8 || p.userData.age > 200) {
+                            p.position.set(0, 2, -5);
+                            p.userData.age = 0;
+                            ((p as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.6;
+                        } else {
+                            ((p as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.6 - (p.position.y / 8));
                         }
                     });
                 });
@@ -535,106 +726,131 @@ class SolarApp {
     }
 
     setupChallengesScene(scene: THREE.Scene, camera: THREE.Camera) {
-        scene.background = new THREE.Color(0x000000);
-        camera.position.set(0, 5, 10);
+        scene.background = new THREE.Color(0x222222);
+        camera.position.set(0, 5, 15);
+
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
 
         const scenarioGroup = new THREE.Group();
-
-        const sun = new THREE.Mesh(
-            new THREE.SphereGeometry(1, 32, 32),
-            new THREE.MeshPhongMaterial({
-                color: 0xFF9800,
-                emissive: 0xFF5722,
-                emissiveIntensity: 0.5
-            })
-        );
-        sun.position.set(-5, 5, 0);
-        scenarioGroup.add(sun);
-
-        const createClouds = () => {
-            const group = new THREE.Group();
-            for (let i = 0; i < 3; i++) {
-                const cloud = createCloud();
-                cloud.position.set(i * 3, Math.random() * 2, 0);
-                group.add(cloud);
-            }
-            return group;
-        };
-
-        const createCloud = () => {
-            const group = new THREE.Group();
-            for (let j = 0; j < 4; j++) {
-                const sphere = new THREE.SphereGeometry(0.5 + Math.random() * 0.3, 8, 8);
-                const material = new THREE.MeshBasicMaterial({
-                    color: 0xFFFFFF,
-                    transparent: true,
-                    opacity: 0.8
-                });
-                const mesh = new THREE.Mesh(sphere, material);
-                mesh.position.set(
-                    (Math.random() - 0.5) * 2,
-                    (Math.random() - 0.5) * 1,
-                    (Math.random() - 0.5) * 1
-                );
-                group.add(mesh);
-            }
-            return group;
-        };
-
-        const createBattery = () => {
-            const group = new THREE.Group();
-
-            const bodyGeometry = new THREE.BoxGeometry(2, 3, 1);
-            const bodyMaterial = new THREE.MeshPhongMaterial({
-                color: 0x333333,
-                emissive: 0x1a237e,
-                emissiveIntensity: 0.1
-            });
-            const body = new THREE.Mesh(bodyGeometry, bodyMaterial);
-            group.add(body);
-
-            const terminalGeometry = new THREE.BoxGeometry(0.5, 0.2, 1.2);
-            const terminalMaterial = new THREE.MeshPhongMaterial({
-                color: 0xFFD700,
-                emissive: 0xFFD700,
-                emissiveIntensity: 0.3
-            });
-            const terminal = new THREE.Mesh(terminalGeometry, terminalMaterial);
-            terminal.position.y = 1.6;
-            group.add(terminal);
-
-            return group;
-        };
-
-        const clouds = createClouds();
-        scenarioGroup.add(clouds);
-
-        const battery = createBattery();
-        battery.position.set(5, 0, 0);
-        scenarioGroup.add(battery);
-
         scene.add(scenarioGroup);
 
-        scene.add(new THREE.AmbientLight(0x404040));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(5, 10, 5);
-        scene.add(directionalLight);
+        // Sun (Background)
+        let sunMesh: THREE.Object3D | null = null;
+        this.loader.load('/sun.glb', (gltf) => {
+            const sun = gltf.scene;
+            sun.scale.set(2, 2, 2);
+            sun.position.set(-5, 5, -5);
+            scenarioGroup.add(sun);
+            sunMesh = sun;
+        }, undefined, () => {
+            const geo = new THREE.SphereGeometry(2, 32, 32);
+            const mat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+            sunMesh = new THREE.Mesh(geo, mat);
+            sunMesh.position.set(-5, 5, -5);
+            scenarioGroup.add(sunMesh);
+        });
+
+        // Clouds
+        const cloudsGroup = new THREE.Group();
+        scenarioGroup.add(cloudsGroup);
+
+        const loadCloud = (x: number, y: number, z: number) => {
+            this.loader.load('/cloud.glb', (gltf) => {
+                const cloud = gltf.scene;
+                cloud.scale.set(1.5, 1.5, 1.5);
+                cloud.position.set(x, y, z);
+                // Make cloud transparent if possible
+                cloud.traverse((child) => {
+                    if ((child as THREE.Mesh).isMesh) {
+                        const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                        m.transparent = true;
+                        m.opacity = 0.8;
+                    }
+                });
+                cloudsGroup.add(cloud);
+            }, undefined, () => {
+                const geo = new THREE.SphereGeometry(1, 16, 16);
+                const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
+                const cloud = new THREE.Mesh(geo, mat);
+                cloud.position.set(x, y, z);
+                cloudsGroup.add(cloud);
+            });
+        };
+
+        loadCloud(0, 5, 2);
+        loadCloud(4, 4, 3);
+        loadCloud(-3, 6, 2);
+
+        // Battery
+        let batteryMesh: THREE.Object3D | null = null;
+        let batteryIndicator: THREE.Mesh | null = null;
+
+        this.loader.load('/battery.glb', (gltf) => {
+            const battery = gltf.scene;
+            battery.scale.set(1.5, 1.5, 1.5);
+            battery.position.set(5, 0, 0);
+            scenarioGroup.add(battery);
+            batteryMesh = battery;
+
+            // Indicator
+            const indGeo = new THREE.BoxGeometry(0.8, 2, 0.8);
+            const indMat = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+            batteryIndicator = new THREE.Mesh(indGeo, indMat);
+            batteryIndicator.position.set(5, 1, 0);
+            batteryIndicator.scale.y = 0.1;
+            scene.add(batteryIndicator);
+
+        }, undefined, () => {
+            const geo = new THREE.BoxGeometry(2, 3, 1);
+            const mat = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            batteryMesh = new THREE.Mesh(geo, mat);
+            batteryMesh.position.set(5, 0, 0);
+            scenarioGroup.add(batteryMesh);
+        });
 
         setTimeout(() => {
             if (this.scenes.challenges) {
                 this.scenes.challenges.scenario = 'intermittence';
                 this.scenes.challenges.setUpdateFunction(() => {
-                    sun.rotation.y += 0.005;
+                    const time = Date.now() * 0.001;
 
                     if (this.scenes.challenges.scenario === 'intermittence') {
-                        clouds.position.x += 0.01;
-                        if (clouds.position.x > 10) clouds.position.x = -10;
+                        // Move clouds
+                        cloudsGroup.children.forEach((cloud, i) => {
+                            cloud.position.x += 0.02;
+                            if (cloud.position.x > 10) cloud.position.x = -10;
+                        });
 
-                        const distance = Math.abs(clouds.position.x - sun.position.x);
-                        sun.material.emissiveIntensity = distance > 3 ? 0.5 : 0.1;
+                        // Dim sun if clouds cover it (simulated by distance)
+                        // Simple logic: if clouds are roughly in front of sun
+                        let covered = false;
+                        cloudsGroup.children.forEach(cloud => {
+                            if (Math.abs(cloud.position.x - (-5)) < 3) covered = true;
+                        });
+
+                        if (sunMesh) {
+                            sunMesh.traverse((child) => {
+                                if ((child as THREE.Mesh).isMesh) {
+                                    const m = (child as THREE.Mesh).material as THREE.MeshStandardMaterial;
+                                    if (m.emissive) m.emissiveIntensity = covered ? 0.1 : 1;
+                                    if (m.color) m.color.setHex(covered ? 0x553300 : 0xffaa00);
+                                }
+                            });
+                        }
+
                     } else if (this.scenes.challenges.scenario === 'storage') {
-                        battery.rotation.y += 0.01;
-                        ((battery.children[1] as THREE.Mesh).material as THREE.MeshPhongMaterial).emissiveIntensity = 0.3 + 0.2 * Math.sin(Date.now() * 0.001);
+                        // Battery fill animation
+                        if (batteryIndicator) {
+                            const level = (Math.sin(time) + 1) / 2;
+                            batteryIndicator.scale.y = level;
+                            batteryIndicator.position.y = 0 + level; // Adjust
+
+                            (batteryIndicator.material as THREE.MeshBasicMaterial).color.setHSL(level * 0.3, 1, 0.5); // Red to Green
+                        }
                     }
                 });
             }
@@ -643,20 +859,33 @@ class SolarApp {
 
     setupWorldMapScene(scene: THREE.Scene, camera: THREE.Camera) {
         scene.background = new THREE.Color(0x0f2027);
-        camera.position.set(0, 10, 20);
+        camera.position.set(0, 0, 15);
 
-        const earthRadius = 5;
-        const earthGeometry = new THREE.SphereGeometry(earthRadius, 64, 64);
-        const earthMaterial = new THREE.MeshPhongMaterial({
-            color: 0x1E90FF,
-            transparent: true,
-            opacity: 0.8,
-            wireframe: false
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 1);
+        dirLight.position.set(10, 10, 10);
+        scene.add(dirLight);
+
+        const earthGroup = new THREE.Group();
+        scene.add(earthGroup);
+
+        // Load Earth
+        this.loader.load('/planet_earth.glb', (gltf) => {
+            const earth = gltf.scene;
+            earth.scale.set(5, 5, 5); // Adjust scale to match previous radius roughly
+            earthGroup.add(earth);
+        }, undefined, () => {
+            const geo = new THREE.SphereGeometry(5, 64, 64);
+            const mat = new THREE.MeshPhongMaterial({ color: 0x1E90FF, transparent: true, opacity: 0.8 });
+            const earth = new THREE.Mesh(geo, mat);
+            earthGroup.add(earth);
         });
-        const earth = new THREE.Mesh(earthGeometry, earthMaterial);
-        scene.add(earth);
 
-        const productionPoints = new THREE.Group();
+        // Markers
+        const markersGroup = new THREE.Group();
+        earthGroup.add(markersGroup); // Attach to earth so they rotate with it
+
         const countries = [
             { name: 'Chine', lat: 35, lon: 105, intensity: 0.9 },
             { name: 'USA', lat: 39, lon: -95, intensity: 0.8 },
@@ -667,54 +896,49 @@ class SolarApp {
             { name: 'Espagne', lat: 40, lon: -4, intensity: 0.6 }
         ];
 
-        const createProductionPoint = (intensity: number) => {
-            const color = intensity > 0.8 ? 0x00FF00 :
-                intensity > 0.6 ? 0xFFFF00 : 0xFF0000;
-
-            const geometry = new THREE.SphereGeometry(0.2, 16, 16);
-            const material = new THREE.MeshBasicMaterial({
-                color: color,
-                transparent: true,
-                opacity: 0.8
-            });
-
-            const point = new THREE.Mesh(geometry, material);
-
-            const haloGeometry = new THREE.SphereGeometry(0.3, 16, 16);
-            const haloMaterial = new THREE.MeshBasicMaterial({
-                color: color,
-                transparent: true,
-                opacity: 0.3
-            });
-            const halo = new THREE.Mesh(haloGeometry, haloMaterial);
-            point.add(halo);
-
-            return point;
-        };
+        // Helper to convert lat/lon to vector3
+        // Assuming radius is ~5 (scale 5 of model, or 5 units if sphere)
+        // Adjust radius based on model bounds if needed. Let's assume 5.
+        const radius = 5;
 
         countries.forEach(country => {
-            const point = createProductionPoint(country.intensity);
-            const position = this.latLonToVector3(country.lat, country.lon, earthRadius + 0.2);
-            point.position.copy(position);
-            productionPoints.add(point);
+            const phi = (90 - country.lat) * (Math.PI / 180);
+            const theta = (country.lon + 180) * (Math.PI / 180);
+
+            const x = -(radius * Math.sin(phi) * Math.cos(theta));
+            const z = (radius * Math.sin(phi) * Math.sin(theta));
+            const y = (radius * Math.cos(phi));
+
+            const markerGeo = new THREE.CylinderGeometry(0.1, 0.1, 1 + country.intensity * 2, 8);
+            markerGeo.translate(0, (1 + country.intensity * 2) / 2, 0); // Pivot at bottom
+            const color = new THREE.Color().setHSL(0.3 - country.intensity * 0.3, 1, 0.5); // Green to Red/Orange
+            const markerMat = new THREE.MeshBasicMaterial({ color: color });
+            const marker = new THREE.Mesh(markerGeo, markerMat);
+
+            marker.position.set(x, y, z);
+            marker.lookAt(0, 0, 0); // Point outwards (actually inwards, so rotate)
+            marker.rotateX(-Math.PI / 2); // Adjust orientation to point out
+
+            // Add a glowing tip
+            const tipGeo = new THREE.SphereGeometry(0.2, 8, 8);
+            const tipMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+            const tip = new THREE.Mesh(tipGeo, tipMat);
+            tip.position.y = 1 + country.intensity * 2;
+            marker.add(tip);
+
+            markersGroup.add(marker);
         });
-
-        scene.add(productionPoints);
-
-        scene.add(new THREE.AmbientLight(0x404040));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(10, 20, 10);
-        scene.add(directionalLight);
 
         setTimeout(() => {
             if (this.scenes.worldMap) {
                 this.scenes.worldMap.setUpdateFunction(() => {
-                    earth.rotation.y += 0.001;
-                    productionPoints.rotation.y += 0.001;
+                    const time = Date.now() * 0.001;
+                    earthGroup.rotation.y += 0.002;
 
-                    productionPoints.children.forEach((point, i) => {
-                        const scale = 1 + 0.2 * Math.sin(Date.now() * 0.001 + i);
-                        point.scale.setScalar(scale);
+                    // Pulse markers
+                    markersGroup.children.forEach((marker, i) => {
+                        const scale = 1 + 0.2 * Math.sin(time * 3 + i);
+                        marker.scale.set(scale, scale, scale);
                     });
                 });
             }
@@ -725,86 +949,92 @@ class SolarApp {
         scene.background = new THREE.Color(0x1a2a6c);
         camera.position.set(0, 5, 15);
 
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.6);
+        scene.add(ambientLight);
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(5, 10, 5);
+        scene.add(dirLight);
+
+        // Solar Bar
         const solarGroup = new THREE.Group();
         solarGroup.position.set(-3, 0, 0);
+        scene.add(solarGroup);
 
-        const solarPanel = new THREE.Mesh(
-            new THREE.BoxGeometry(2, 0.1, 1),
-            new THREE.MeshPhongMaterial({
-                color: 0x1E90FF,
-                emissive: 0x1a237e,
-                emissiveIntensity: 0.2
-            })
-        );
-        solarGroup.add(solarPanel);
+        const solarBarGeo = new THREE.BoxGeometry(2, 1, 2);
+        solarBarGeo.translate(0, 0.5, 0); // Pivot bottom
+        const solarBarMat = new THREE.MeshPhongMaterial({ color: 0x4CAF50, emissive: 0x2E7D32, emissiveIntensity: 0.2 });
+        const solarBar = new THREE.Mesh(solarBarGeo, solarBarMat);
+        solarGroup.add(solarBar);
 
-        for (let i = 0; i < 5; i++) {
-            const ray = new THREE.Mesh(
-                new THREE.ConeGeometry(0.05, 1, 4),
-                new THREE.MeshBasicMaterial({
-                    color: 0x00FF00,
-                    transparent: true,
-                    opacity: 0.7
-                })
-            );
-            ray.position.set(0, 0.6 + i * 0.3, 0);
-            ray.rotation.x = Math.PI;
-            solarGroup.add(ray);
-        }
+        // Solar Icon (Sun)
+        const sunIconGeo = new THREE.SphereGeometry(0.8, 16, 16);
+        const sunIconMat = new THREE.MeshBasicMaterial({ color: 0xffaa00 });
+        const sunIcon = new THREE.Mesh(sunIconGeo, sunIconMat);
+        sunIcon.position.y = 8; // Target height
+        solarGroup.add(sunIcon);
 
+        // Fossil Bar
         const fossilGroup = new THREE.Group();
         fossilGroup.position.set(3, 0, 0);
-
-        const factory = new THREE.Mesh(
-            new THREE.BoxGeometry(1.5, 1.5, 1.5),
-            new THREE.MeshPhongMaterial({
-                color: 0x666666,
-                emissive: 0x333333,
-                emissiveIntensity: 0.1
-            })
-        );
-        fossilGroup.add(factory);
-
-        for (let i = 0; i < 5; i++) {
-            const smoke = new THREE.Mesh(
-                new THREE.SphereGeometry(0.1 + i * 0.05, 8, 8),
-                new THREE.MeshBasicMaterial({
-                    color: 0x888888,
-                    transparent: true,
-                    opacity: 0.5
-                })
-            );
-            smoke.position.set(0, 1 + i * 0.3, 0);
-            fossilGroup.add(smoke);
-        }
-
-        scene.add(solarGroup);
         scene.add(fossilGroup);
 
-        scene.add(new THREE.AmbientLight(0x404040));
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-        directionalLight.position.set(5, 10, 5);
-        scene.add(directionalLight);
+        const fossilBarGeo = new THREE.BoxGeometry(2, 1, 2);
+        fossilBarGeo.translate(0, 0.5, 0);
+        const fossilBarMat = new THREE.MeshPhongMaterial({ color: 0x555555 });
+        const fossilBar = new THREE.Mesh(fossilBarGeo, fossilBarMat);
+        fossilGroup.add(fossilBar);
+
+        // Fossil Icon (Factory/Barrel)
+        const barrelGeo = new THREE.CylinderGeometry(0.6, 0.6, 1, 16);
+        const barrelMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+        const barrel = new THREE.Mesh(barrelGeo, barrelMat);
+        barrel.position.y = 4; // Target height
+        fossilGroup.add(barrel);
+
+        // Smoke Particles
+        const smokeParticles = new THREE.Group();
+        fossilGroup.add(smokeParticles);
+
+        const smokeGeo = new THREE.SphereGeometry(0.3, 8, 8);
+        const smokeMat = new THREE.MeshBasicMaterial({ color: 0x888888, transparent: true, opacity: 0.5 });
+
+        for (let i = 0; i < 15; i++) {
+            const s = new THREE.Mesh(smokeGeo, smokeMat);
+            s.position.set(0, 4, 0);
+            s.userData = {
+                velocity: new THREE.Vector3((Math.random() - 0.5) * 0.1, 0.05 + Math.random() * 0.05, (Math.random() - 0.5) * 0.1),
+                age: Math.random() * 100
+            };
+            smokeParticles.add(s);
+        }
 
         setTimeout(() => {
             if (this.scenes.comparison) {
                 this.scenes.comparison.setUpdateFunction(() => {
-                    solarGroup.rotation.y += 0.01;
-                    fossilGroup.rotation.y += 0.01;
+                    const time = Date.now() * 0.001;
 
-                    solarGroup.children.slice(1).forEach((ray, i) => {
-                        ray.scale.y = 1 + 0.3 * Math.sin(Date.now() * 0.001 + i);
-                    });
+                    // Grow Bars
+                    solarBar.scale.y = THREE.MathUtils.lerp(solarBar.scale.y, 8, 0.02);
+                    fossilBar.scale.y = THREE.MathUtils.lerp(fossilBar.scale.y, 4, 0.02);
 
-                    fossilGroup.children.slice(1).forEach((smoke, i) => {
-                        smoke.position.y += 0.01;
-                        smoke.scale.x += 0.002;
-                        smoke.scale.y += 0.002;
-                        smoke.scale.z += 0.002;
+                    // Move Icons
+                    sunIcon.position.y = solarBar.scale.y + 1 + Math.sin(time) * 0.2;
+                    barrel.position.y = fossilBar.scale.y + 0.8;
 
-                        if (smoke.position.y > 3) {
-                            smoke.position.y = 1;
-                            smoke.scale.set(1, 1, 1);
+                    // Animate Smoke
+                    smokeParticles.children.forEach((s) => {
+                        s.position.add(s.userData.velocity);
+                        s.userData.age++;
+                        const scale = 1 + s.userData.age * 0.05;
+                        s.scale.set(scale, scale, scale);
+
+                        if (s.userData.age > 100) {
+                            s.position.set(0, fossilBar.scale.y + 0.5, 0);
+                            s.userData.age = 0;
+                            s.scale.set(1, 1, 1);
+                            ((s as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = 0.5;
+                        } else {
+                            ((s as THREE.Mesh).material as THREE.MeshBasicMaterial).opacity = Math.max(0, 0.5 - (s.userData.age / 100));
                         }
                     });
                 });
@@ -839,44 +1069,102 @@ class SolarApp {
 
         const wall = new THREE.Mesh(
             new THREE.BoxGeometry(4, 3, 0.2),
-            new THREE.MeshPhongMaterial({
-                color: 0xF5F5DC,
-                shininess: 30
+            new THREE.MeshStandardMaterial({
+                color: 0xeeeeee,
+                roughness: 0.2,
+                metalness: 0.1
             })
         );
         wallGroup.add(wall);
 
-        const particles = new THREE.Group();
-        for (let i = 0; i < 30; i++) {
-            const particle = new THREE.Mesh(
-                new THREE.SphereGeometry(0.05, 4, 4),
-                new THREE.MeshBasicMaterial({
-                    color: 0x1E90FF,
-                    transparent: true,
-                    opacity: 0.8
-                })
-            );
-            particle.position.set(
-                (Math.random() - 0.5) * 3.8,
-                (Math.random() - 0.5) * 2.8,
-                0.1
-            );
-            particles.add(particle);
+        // Nano-particles (Dots on surface)
+        const particleCount = 1000;
+        const particleGeo = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const colors = new Float32Array(particleCount * 3);
+
+        const color1 = new THREE.Color(0x00ffff); // Cyan
+        const color2 = new THREE.Color(0x0000ff); // Blue
+
+        for (let i = 0; i < particleCount; i++) {
+            const x = (Math.random() - 0.5) * 3.8;
+            const y = (Math.random() - 0.5) * 2.8;
+            const z = 0.11; // Slightly in front of wall
+
+            positions[i * 3] = x;
+            positions[i * 3 + 1] = y;
+            positions[i * 3 + 2] = z;
+
+            // Mix colors
+            const mixedColor = color1.clone().lerp(color2, Math.random());
+            colors[i * 3] = mixedColor.r;
+            colors[i * 3 + 1] = mixedColor.g;
+            colors[i * 3 + 2] = mixedColor.b;
         }
+
+        particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particleGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+        const particleMat = new THREE.PointsMaterial({
+            size: 0.05,
+            vertexColors: true,
+            transparent: true,
+            opacity: 0.8,
+            blending: THREE.AdditiveBlending
+        });
+
+        const particles = new THREE.Points(particleGeo, particleMat);
         wallGroup.add(particles);
+
+        // Energy Output (Plug/Connector)
+        const connector = new THREE.Mesh(
+            new THREE.BoxGeometry(0.5, 0.5, 0.3),
+            new THREE.MeshStandardMaterial({ color: 0x333333 })
+        );
+        connector.position.set(1.5, -1.2, 0.1);
+        wallGroup.add(connector);
+
+        const lightIndicator = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 16, 16),
+            new THREE.MeshBasicMaterial({ color: 0x00ff00 })
+        );
+        lightIndicator.position.set(0, 0, 0.2);
+        connector.add(lightIndicator);
 
         scene.add(wallGroup);
 
         setTimeout(() => {
             if (this.scenes.tech1) {
                 this.scenes.tech1.setUpdateFunction(() => {
-                    wallGroup.rotation.y += 0.005;
+                    const time = Date.now() * 0.001;
 
-                    particles.children.forEach((particle: any, i) => {
-                        particle.material.opacity = 0.5 + 0.3 * Math.sin(Date.now() * 0.001 + i);
-                        particle.rotation.x += 0.01;
-                        particle.rotation.y += 0.01;
-                    });
+                    // Wave effect on particles
+                    const positions = particles.geometry.attributes.position.array as Float32Array;
+                    const colors = particles.geometry.attributes.color.array as Float32Array;
+
+                    for (let i = 0; i < particleCount; i++) {
+                        const x = positions[i * 3];
+                        const y = positions[i * 3 + 1];
+
+                        // Wave moving across
+                        const wave = Math.sin(x * 2 + y * 2 + time * 5);
+
+                        // Brighten color based on wave
+                        if (wave > 0.8) {
+                            colors[i * 3] = 1; // R
+                            colors[i * 3 + 1] = 1; // G
+                            colors[i * 3 + 2] = 1; // B
+                        } else {
+                            // Reset to base (simplified, just making them blueish)
+                            colors[i * 3] = 0;
+                            colors[i * 3 + 1] = 0.5 + 0.5 * Math.random();
+                            colors[i * 3 + 2] = 1;
+                        }
+                    }
+                    particles.geometry.attributes.color.needsUpdate = true;
+
+                    // Pulse indicator
+                    (lightIndicator.material as THREE.MeshBasicMaterial).color.setHSL(0.3, 1, 0.5 + 0.5 * Math.sin(time * 10));
                 });
             }
         }, 0);
